@@ -447,7 +447,7 @@ const App: React.FC = () => {
       sum += dataArray[i];
     }
     const average = sum / dataArray.length;
-    const normalizedLevel = average / 255; // 归一化到 0-1
+    const normalizedLevel = average / 255;
     
     return normalizedLevel;
   }, []);
@@ -577,7 +577,7 @@ const App: React.FC = () => {
         
         return currentTime >= (adjustedStart - tolerance) && 
                currentTime <= (adjustedEnd + tolerance) &&
-               s.hasAudio; // 确保片段本身有音频
+               s.hasAudio;
       });
       
       newText = activeSeg ? activeSeg.text : '';
@@ -650,18 +650,16 @@ const App: React.FC = () => {
     setStatus(AppStatus.ANALYZING);
     setProcessingMsg(t.removingFillerWords);
     
-    // 传入选择的语言
     analyzeVideoWithGemini(file, subtitleLanguage, setProcessingMsg)
       .then(res => { 
-        // 过滤掉无效片段（isInvalid=true的片段）
         const validSegments = res.filter(s => !s.isInvalid);
         setSegments(validSegments);
         
-        // 默认选择非冗余的有效片段
         const meaningfulSegments = validSegments.filter(s => !s.isRedundant && s.confidence > 0.5);
         setSelectedSegments(meaningfulSegments);
         
         setStatus(AppStatus.READY);
+        // 修复：使用 replace 方法处理字符串
         setProcessingMsg(t.processingComplete.replace('{count}', validSegments.length.toString()));
         
         if (!audioContextRef.current) {
@@ -670,8 +668,11 @@ const App: React.FC = () => {
       })
       .catch(err => {
         if (err.message.includes('401') || err.message.toLowerCase().includes('auth')) {
-          setError(t.authError); setIsKeySelected(false);
-        } else { setError(err.message); }
+          setError(t.authError); 
+          setIsKeySelected(false);
+        } else { 
+          setError(err.message); 
+        }
         setStatus(AppStatus.IDLE);
       });
   };
@@ -720,6 +721,7 @@ const App: React.FC = () => {
 
   const composeVideo = async () => {
     setStatus(AppStatus.GENERATING);
+    // 修复：使用 replace 方法处理字符串
     setProcessingMsg(t.exportInfo.replace('{quality}', qualityPresets[videoQuality].label));
     
     try {
@@ -814,7 +816,6 @@ const App: React.FC = () => {
           
           recorder.start(100);
 
-          // 只导出有效片段（已过滤isInvalid）
           const exportSegments = selectedSegments.filter(s => !s.isRedundant);
           
           ctx.fillStyle = '#000000';
@@ -869,7 +870,6 @@ const App: React.FC = () => {
                     console.warn('Draw error:', drawError);
                   }
                   
-                  // 只有在有音频时才渲染字幕
                   if (isPreviewSubVisible && seg.hasAudio) {
                     try {
                       const fontSize = Math.max(16, Math.floor(canvas.height / 20)) * subSizeScale;
@@ -933,7 +933,6 @@ const App: React.FC = () => {
     return `rgba(${r}, ${g}, ${b}, ${opacity})`;
   };
 
-  // 语言选项
   const languageOptions = [
     { value: 'zh', label: t.chinese, icon: '🇨🇳' },
     { value: 'en', label: t.english, icon: '🇺🇸' },
@@ -941,12 +940,7 @@ const App: React.FC = () => {
     { value: 'ko', label: t.korean, icon: '🇰🇷' }
   ];
 
-  // 统计信息
   const validSegmentsCount = useMemo(() => segments.length, [segments]);
-  const invalidSegmentsRemoved = useMemo(() => {
-    // 这个值在分析完成后才能知道，这里用原始数据减去有效数据
-    return 0; // 实际应该在分析完成后从返回数据中获取
-  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-[#030712] text-slate-100 overflow-hidden font-sans relative">
@@ -1128,7 +1122,6 @@ const App: React.FC = () => {
       <main className="flex-grow flex flex-col lg:flex-row overflow-hidden relative">
         <aside className={`absolute inset-y-0 left-0 w-72 bg-[#111827] border-r border-slate-800 z-[70] transition-transform duration-300 transform ${showStylePanel ? 'translate-x-0' : '-translate-x-full'} lg:relative lg:translate-x-0 lg:flex ${showStylePanel ? 'flex' : 'hidden'} flex-col shrink-0`}>
           <div className="p-6 space-y-6 overflow-y-auto custom-scrollbar">
-            {/* 样式设置保持不变 */}
             <section className="space-y-4">
               <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">{t.textColor}</h3>
               <div className="grid grid-cols-2 gap-2">
@@ -1215,7 +1208,6 @@ const App: React.FC = () => {
                       }
                     }}
                   />
-                  {/* 只有在有音频且预览可见时才显示字幕 */}
                   {isPreviewSubVisible && hasAudioCurrently && currentPreviewText && (
                     <div className="absolute inset-x-0 bottom-[10%] pointer-events-none flex items-center justify-center px-6">
                        <div 
@@ -1239,7 +1231,6 @@ const App: React.FC = () => {
                        </div>
                     </div>
                   )}
-                  {/* 静音提示 */}
                   {isPreviewSubVisible && !hasAudioCurrently && (
                     <div className="absolute inset-x-0 bottom-[10%] pointer-events-none flex items-center justify-center">
                       <div className="bg-slate-800/50 text-slate-400 text-[10px] px-3 py-1 rounded-full backdrop-blur-sm flex items-center gap-1">
@@ -1478,7 +1469,12 @@ const App: React.FC = () => {
       {status === AppStatus.COMPLETED && finalVideoUrl && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/95 p-4">
           <div className="bg-[#111827] border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col shadow-3xl">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center"><h2 className="text-sm font-bold flex items-center gap-2"><CheckCircle className="text-emerald-500 w-4 h-4" /> {t.exportSuccess}</h2><button onClick={() => setStatus(AppStatus.READY)}><X className="w-4 h-4" /></button></div>
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <CheckCircle className="text-emerald-500 w-4 h-4" /> {t.exportSuccess}
+              </h2>
+              <button onClick={() => setStatus(AppStatus.READY)}><X className="w-4 h-4" /></button>
+            </div>
             <div className="p-4 lg:p-8 flex flex-col items-center">
               <div className="w-full mb-4 px-4 py-2 bg-slate-900 rounded-lg border border-slate-800">
                 <div className="flex items-center justify-between text-[10px]">
@@ -1517,7 +1513,10 @@ const App: React.FC = () => {
       {error && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-red-600/90 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 z-[150] animate-in slide-in-from-bottom-5">
           <AlertCircle className="w-5 h-5" />
-          <div className="flex flex-col"><span className="text-[10px] font-bold uppercase">{t.systemAlert}</span><span className="text-[10px] opacity-80">{error}</span></div>
+          <div className="flex flex-col">
+            <span className="text-[10px] font-bold uppercase">{t.systemAlert}</span>
+            <span className="text-[10px] opacity-80">{error}</span>
+          </div>
           <button onClick={() => setError(null)} className="ml-4">✕</button>
         </div>
       )}
