@@ -38,13 +38,10 @@ import {
   Mic,
   Subtitles,
   Activity,
-  Radio,
-  Globe,
-  VolumeX,
-  Volume1
+  Radio
 } from 'lucide-react';
 import { AppStatus, SubtitleSegment, VideoMetadata } from './types';
-import { analyzeVideoWithGemini, SubtitleLanguage } from './services/geminiService';
+import { analyzeVideoWithGemini } from './services/geminiService';
 
 type Language = 'en' | 'zh';
 
@@ -61,25 +58,25 @@ interface QualityPreset {
 const qualityPresets: Record<VideoQuality, QualityPreset> = {
   low: {
     label: 'Low (480p)',
-    bitrate: 1000000,
+    bitrate: 1000000, // 1 Mbps
     resolution: '480p',
     description: 'Fast export, smaller file'
   },
   medium: {
     label: 'Medium (720p)',
-    bitrate: 2500000,
+    bitrate: 2500000, // 2.5 Mbps
     resolution: '720p',
     description: 'Balanced quality and size'
   },
   high: {
     label: 'High (1080p)',
-    bitrate: 8000000,
+    bitrate: 8000000, // 8 Mbps
     resolution: '1080p',
     description: 'Good quality for sharing'
   },
   ultra: {
     label: 'Ultra (Source)',
-    bitrate: 15000000,
+    bitrate: 15000000, // 15 Mbps
     resolution: 'source',
     description: 'Maximum quality'
   }
@@ -143,18 +140,7 @@ const translations = {
     redundant: 'Redundant',
     totalSegments: 'Total: {count} segments',
     syncDrift: 'Sync Drift: {drift}ms',
-    ptsOffset: 'PTS Offset',
-    subtitleLanguage: 'Subtitle Language',
-    chinese: 'Chinese',
-    english: 'English',
-    japanese: 'Japanese',
-    korean: 'Korean',
-    silence: 'Silent',
-    noAudio: 'No Audio',
-    audioDetected: 'Audio Detected',
-    invalidSegments: 'Invalid Segments Removed',
-    motionStatic: 'Static Frame',
-    motionActive: 'Motion Detected'
+    ptsOffset: 'PTS Offset'
   },
   zh: {
     title: 'NovaClip',
@@ -213,18 +199,7 @@ const translations = {
     redundant: '冗余',
     totalSegments: '共 {count} 个片段',
     syncDrift: '同步偏移: {drift}ms',
-    ptsOffset: 'PTS偏移',
-    subtitleLanguage: '字幕语言',
-    chinese: '中文',
-    english: '英文',
-    japanese: '日文',
-    korean: '韩文',
-    silence: '静音',
-    noAudio: '无音频',
-    audioDetected: '有音频',
-    invalidSegments: '已移除无效片段',
-    motionStatic: '画面静止',
-    motionActive: '画面运动'
+    ptsOffset: 'PTS偏移'
   }
 };
 
@@ -235,27 +210,23 @@ const fontOptions = [
 ];
 
 const MAX_HISTORY = 50;
-const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
 const SUPPORTED_FORMATS = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm'];
 
-// 音频能量阈值 - 用于判断是否有声音
-const AUDIO_ENERGY_THRESHOLD = 0.01;
-const SYNC_TOLERANCE_MS = 10;
-const PTS_OFFSET_CHECK_INTERVAL = 1000;
+// 时间戳同步精度优化
+const SYNC_TOLERANCE_MS = 10; // 10ms 同步容差
+const PTS_OFFSET_CHECK_INTERVAL = 1000; // 每秒检查PTS偏移
 
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('zh');
   const t = useMemo(() => translations[lang], [lang]);
-
-  // 字幕语言选择
-  const [subtitleLanguage, setSubtitleLanguage] = useState<SubtitleLanguage>('zh');
-  const [showLanguagePanel, setShowLanguagePanel] = useState(false);
 
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [video, setVideo] = useState<VideoMetadata | null>(null);
   const [segments, setSegments] = useState<SubtitleSegment[]>([]);
   const [selectedSegments, setSelectedSegments] = useState<SubtitleSegment[]>([]);
   
+  // Video quality state
   const [videoQuality, setVideoQuality] = useState<VideoQuality>('high');
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   
@@ -291,11 +262,7 @@ const App: React.FC = () => {
   const [isPreviewingProject, setIsPreviewingProject] = useState(false);
   const [activeClipIndex, setActiveClipIndex] = useState(-1);
 
-  // 音频能量检测
-  const [currentAudioLevel, setCurrentAudioLevel] = useState(0);
-  const [hasAudioCurrently, setHasAudioCurrently] = useState(true);
-
-  // PTS同步
+  // 音频同步优化 - 基于Azure语音服务的PTS机制[citation:4]
   const [audioSyncOffset, setAudioSyncOffset] = useState(0);
   const [ptsOffsetHistory, setPtsOffsetHistory] = useState<number[]>([]);
   const [isAudioSynced, setIsAudioSynced] = useState(true);
@@ -305,11 +272,11 @@ const App: React.FC = () => {
   const modalVideoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<number>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const lastSyncTimeRef = useRef<number>(0);
   const lastPtsCheckRef = useRef<number>(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
 
   const updateSegmentsWithHistory = useCallback((newSegments: SubtitleSegment[]) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -361,6 +328,7 @@ const App: React.FC = () => {
   };
 
   const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, drawBg: boolean) => {
+    // Split text into lines
     const words = text.split('');
     let line = '';
     const lines = [];
@@ -377,6 +345,7 @@ const App: React.FC = () => {
     }
     lines.push(line);
 
+    // Calculate dimensions for background
     if (drawBg && subBgOpacity > 0) {
       const totalHeight = lines.length * lineHeight;
       const maxLineWidth = Math.max(...lines.map(l => ctx.measureText(l).width));
@@ -393,6 +362,7 @@ const App: React.FC = () => {
       ctx.restore();
     }
 
+    // Draw text (from bottom to top)
     ctx.save();
     ctx.shadowColor = subShadowColor;
     ctx.shadowBlur = subShadowBlur;
@@ -401,6 +371,7 @@ const App: React.FC = () => {
     
     for (let i = lines.length - 1; i >= 0; i--) {
       const lineY = y - (lines.length - 1 - i) * lineHeight;
+      // Draw stroke first, then fill
       ctx.strokeText(lines[i], x, lineY);
       ctx.fillText(lines[i], x, lineY);
     }
@@ -408,61 +379,20 @@ const App: React.FC = () => {
   };
 
   /**
-   * 音频能量检测 - 用于判断是否有声音
-   */
-  const setupAudioAnalysis = useCallback((videoElement: HTMLVideoElement) => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
-    
-    const audioCtx = audioContextRef.current;
-    
-    if (!analyserRef.current) {
-      analyserRef.current = audioCtx.createAnalyser();
-      analyserRef.current.fftSize = 256;
-    }
-    
-    if (!sourceRef.current && videoElement) {
-      try {
-        sourceRef.current = audioCtx.createMediaElementSource(videoElement);
-        sourceRef.current.connect(analyserRef.current);
-        analyserRef.current.connect(audioCtx.destination);
-      } catch (e) {
-        console.warn('Audio analysis setup failed:', e);
-      }
-    }
-  }, []);
-
-  /**
-   * 获取当前音频能量
-   */
-  const getAudioLevel = useCallback((): number => {
-    if (!analyserRef.current) return 0;
-    
-    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-    analyserRef.current.getByteFrequencyData(dataArray);
-    
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      sum += dataArray[i];
-    }
-    const average = sum / dataArray.length;
-    const normalizedLevel = average / 255;
-    
-    return normalizedLevel;
-  }, []);
-
-  /**
-   * 计算PTS偏移
+   * 基于PTS（呈现时间戳）的音视频同步优化
+   * 参考Azure语音服务的同步机制[citation:4]
    */
   const calculatePTSOffset = useCallback((videoElement: HTMLVideoElement): number => {
     if (!videoElement || !videoElement.readyState) return 0;
     
+    // 获取视频的当前播放时间
     const currentTime = videoElement.currentTime;
     
+    // 如果有音频上下文，获取音频的当前时间
     if (audioContextRef.current && audioContextRef.current.state === 'running') {
       const audioTime = audioContextRef.current.currentTime;
-      const offset = (currentTime - audioTime) * 1000;
+      // 计算PTS偏移量（视频时间 vs 音频时间）
+      const offset = (currentTime - audioTime) * 1000; // 转换为毫秒
       return offset;
     }
     
@@ -470,26 +400,28 @@ const App: React.FC = () => {
   }, []);
 
   /**
-   * 动态同步容差
+   * 动态同步容差调整 - 基于PTS偏移历史
    */
   const calculateDynamicTolerance = useCallback((): number => {
     if (ptsOffsetHistory.length === 0) return SYNC_TOLERANCE_MS / 1000;
     
+    // 计算PTS偏移的平均值和标准差
     const avg = ptsOffsetHistory.reduce((a, b) => a + b, 0) / ptsOffsetHistory.length;
     const variance = ptsOffsetHistory.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / ptsOffsetHistory.length;
     const stdDev = Math.sqrt(variance);
     
+    // 根据偏移稳定性调整容差
     if (stdDev < 5) {
-      return SYNC_TOLERANCE_MS / 1000;
+      return SYNC_TOLERANCE_MS / 1000; // 稳定状态，使用基础容差
     } else if (stdDev < 15) {
-      return (SYNC_TOLERANCE_MS * 2) / 1000;
+      return (SYNC_TOLERANCE_MS * 2) / 1000; // 中等波动
     } else {
-      return (SYNC_TOLERANCE_MS * 3) / 1000;
+      return (SYNC_TOLERANCE_MS * 3) / 1000; // 高度波动
     }
   }, [ptsOffsetHistory]);
 
   /**
-   * 优化版字幕同步 - 静音时隐藏字幕
+   * 优化版字幕同步 - 使用PTS偏移量进行动态调整
    */
   const syncSubtitles = useCallback(() => {
     const v = videoRef.current;
@@ -498,25 +430,23 @@ const App: React.FC = () => {
     const now = performance.now();
     const currentTime = v.currentTime;
     
-    // 检测音频能量
-    const audioLevel = getAudioLevel();
-    setCurrentAudioLevel(audioLevel);
-    const hasAudio = audioLevel > AUDIO_ENERGY_THRESHOLD;
-    setHasAudioCurrently(hasAudio);
-    
-    // PTS偏移检查
+    // 定期检查PTS偏移 (Azure语音服务同步机制[citation:4])
     if (now - lastPtsCheckRef.current > PTS_OFFSET_CHECK_INTERVAL) {
       lastPtsCheckRef.current = now;
       
       const ptsOffset = calculatePTSOffset(v);
       setPtsOffsetHistory(prev => {
         const newHistory = [...prev, ptsOffset];
+        // 保留最近10个偏移值
         return newHistory.slice(-10);
       });
       
+      // 计算平均偏移
       if (ptsOffsetHistory.length > 0) {
         const avgOffset = ptsOffsetHistory.reduce((a, b) => a + b, 0) / ptsOffsetHistory.length;
         setSyncDrift(Math.round(avgOffset));
+        
+        // 如果平均偏移超过30ms，标记为不同步
         setIsAudioSynced(Math.abs(avgOffset) < 30);
       }
     }
@@ -524,6 +454,7 @@ const App: React.FC = () => {
     if (isPreviewingProject && selectedSegments.length > 0) {
       const currentClip = selectedSegments[activeClipIndex];
       if (currentClip) {
+        // 使用动态容差进行片段边界检测
         const tolerance = calculateDynamicTolerance();
         const adjustedEndTime = currentClip.endTime - tolerance;
         
@@ -532,8 +463,10 @@ const App: React.FC = () => {
             const nextIdx = activeClipIndex + 1;
             const nextClip = selectedSegments[nextIdx];
             
+            // 平滑过渡
             setActiveClipIndex(nextIdx);
             
+            // 考虑PTS偏移进行时间调整
             const ptsOffset = ptsOffsetHistory.length > 0 
               ? ptsOffsetHistory[ptsOffsetHistory.length - 1] / 1000 
               : 0;
@@ -545,6 +478,7 @@ const App: React.FC = () => {
             v.pause();
           }
         } else if (currentTime < currentClip.startTime - tolerance) {
+          // 漂移过大，重置到正确位置
           const ptsOffset = ptsOffsetHistory.length > 0 
             ? ptsOffsetHistory[ptsOffsetHistory.length - 1] / 1000 
             : 0;
@@ -555,36 +489,28 @@ const App: React.FC = () => {
       }
     }
 
-    // 查找当前应该显示的字幕 - 关键逻辑：只有有音频时才显示字幕
+    // 查找当前应该显示的字幕 - 使用动态容差
     const tolerance = calculateDynamicTolerance();
     
+    // 预览模式下只检查当前片段，否则检查所有片段
     const searchSegments = isPreviewingProject && activeClipIndex !== -1
       ? [selectedSegments[activeClipIndex]]
       : segments;
     
-    // 根据音频能量决定是否显示字幕
-    let newText = '';
-    
-    if (hasAudio) {
-      // 有音频时才查找匹配的字幕
-      const activeSeg = searchSegments.find(s => {
-        const ptsOffset = ptsOffsetHistory.length > 0 
-          ? ptsOffsetHistory[ptsOffsetHistory.length - 1] / 1000 
-          : 0;
-        
-        const adjustedStart = s.startTime + ptsOffset;
-        const adjustedEnd = s.endTime + ptsOffset;
-        
-        return currentTime >= (adjustedStart - tolerance) && 
-               currentTime <= (adjustedEnd + tolerance) &&
-               s.hasAudio;
-      });
+    const activeSeg = searchSegments.find(s => {
+      // 应用PTS偏移进行时间匹配
+      const ptsOffset = ptsOffsetHistory.length > 0 
+        ? ptsOffsetHistory[ptsOffsetHistory.length - 1] / 1000 
+        : 0;
       
-      newText = activeSeg ? activeSeg.text : '';
-    } else {
-      // 无音频时清空字幕
-      newText = '';
-    }
+      const adjustedStart = s.startTime + ptsOffset;
+      const adjustedEnd = s.endTime + ptsOffset;
+      
+      return currentTime >= (adjustedStart - tolerance) && 
+             currentTime <= (adjustedEnd + tolerance);
+    });
+    
+    const newText = activeSeg ? activeSeg.text : '';
     
     if (newText !== currentPreviewText) {
       setCurrentPreviewText(newText);
@@ -594,14 +520,8 @@ const App: React.FC = () => {
   }, [
     isPreviewingProject, activeClipIndex, selectedSegments, 
     segments, currentPreviewText, calculatePTSOffset, 
-    calculateDynamicTolerance, ptsOffsetHistory, getAudioLevel
+    calculateDynamicTolerance, ptsOffsetHistory
   ]);
-
-  useEffect(() => {
-    if (videoRef.current) {
-      setupAudioAnalysis(videoRef.current);
-    }
-  }, [setupAudioAnalysis]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(syncSubtitles);
@@ -650,29 +570,27 @@ const App: React.FC = () => {
     setStatus(AppStatus.ANALYZING);
     setProcessingMsg(t.removingFillerWords);
     
-    analyzeVideoWithGemini(file, subtitleLanguage, setProcessingMsg)
+    analyzeVideoWithGemini(file, setProcessingMsg)
       .then(res => { 
-        const validSegments = res.filter(s => !s.isInvalid);
-        setSegments(validSegments);
+        // 加载所有片段，包括冗余片段
+        setSegments(res);
         
-        const meaningfulSegments = validSegments.filter(s => !s.isRedundant && s.confidence > 0.5);
+        // 默认只选择非冗余的高置信度片段
+        const meaningfulSegments = res.filter(s => !s.isRedundant && s.confidence > 0.5);
         setSelectedSegments(meaningfulSegments);
         
         setStatus(AppStatus.READY);
-        // 修复：使用 replace 方法处理字符串
-        setProcessingMsg(t.processingComplete.replace('{count}', validSegments.length.toString()));
+        setProcessingMsg(t.processingComplete.replace('{count}', res.length.toString()));
         
+        // 初始化音频上下文
         if (!audioContextRef.current) {
-          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
         }
       })
       .catch(err => {
         if (err.message.includes('401') || err.message.toLowerCase().includes('auth')) {
-          setError(t.authError); 
-          setIsKeySelected(false);
-        } else { 
-          setError(err.message); 
-        }
+          setError(t.authError); setIsKeySelected(false);
+        } else { setError(err.message); }
         setStatus(AppStatus.IDLE);
       });
   };
@@ -708,20 +626,27 @@ const App: React.FC = () => {
     setTempEditText(newText);
   };
 
+  /**
+   * 处理片段选择/取消选择 - 点击切换
+   */
   const handleSegmentToggle = (segment: SubtitleSegment) => {
     const isSelected = selectedSegments.some(s => s.id === segment.id);
     
     if (isSelected) {
+      // 取消选择：从剪辑轴移除
       const newSelected = selectedSegments.filter(s => s.id !== segment.id);
       updateSegmentsWithHistory(newSelected);
     } else {
+      // 选择：添加到剪辑轴
       updateSegmentsWithHistory([...selectedSegments, segment]);
     }
   };
 
+  /**
+   * 优化版视频合成 - 基于PTS同步
+   */
   const composeVideo = async () => {
     setStatus(AppStatus.GENERATING);
-    // 修复：使用 replace 方法处理字符串
     setProcessingMsg(t.exportInfo.replace('{quality}', qualityPresets[videoQuality].label));
     
     try {
@@ -735,6 +660,7 @@ const App: React.FC = () => {
         const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })!;
 
         v.onloadedmetadata = async () => {
+          // Apply quality settings
           const quality = qualityPresets[videoQuality];
           let targetWidth = v.videoWidth;
           let targetHeight = v.videoHeight;
@@ -753,23 +679,28 @@ const App: React.FC = () => {
           
           console.log(`Rendering at ${targetWidth}x${targetHeight}, bitrate: ${quality.bitrate}`);
           
+          // 创建音频上下文用于精确同步
           const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
           const audioCtx = new AudioContextClass();
           await audioCtx.resume();
           
+          // 创建媒体元素源
           const source = audioCtx.createMediaElementSource(v);
           const destination = audioCtx.createMediaStreamDestination();
           source.connect(destination);
           source.connect(audioCtx.destination);
           
+          // 获取视频流
           const videoStream = canvas.captureStream(30);
           
+          // 合并音视频流
           const tracks = [
             ...videoStream.getVideoTracks(),
             ...destination.stream.getAudioTracks()
           ];
           const combinedStream = new MediaStream(tracks);
 
+          // 检查支持的MIME类型
           const mimeTypes = [
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
@@ -814,20 +745,25 @@ const App: React.FC = () => {
             reject(new Error('Recording failed'));
           };
           
+          // 开始录制
           recorder.start(100);
 
+          // 使用所有选中的片段（不包括冗余的）
           const exportSegments = selectedSegments.filter(s => !s.isRedundant);
           
+          // 确保第一帧被渲染
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           
           for (const seg of exportSegments) {
             setProcessingMsg(`${t.rendering}: ${seg.text.slice(0, 12)}...`);
             
+            // 精确跳转到片段开始时间
             v.currentTime = seg.startTime;
             v.muted = false;
             v.volume = 1.0;
             
+            // 等待跳转完成
             await new Promise<void>((resolveSeek) => {
               const onSeeked = () => {
                 v.removeEventListener('seeked', onSeeked);
@@ -837,12 +773,14 @@ const App: React.FC = () => {
               setTimeout(resolveSeek, 100);
             });
             
+            // 开始播放
             try {
               await v.play();
             } catch (playError) {
               console.warn('Play error:', playError);
             }
             
+            // 渲染片段帧
             await new Promise<void>((resolveSegment) => {
               let lastFrameTime = performance.now();
               const targetFPS = 30;
@@ -852,25 +790,30 @@ const App: React.FC = () => {
                 const now = performance.now();
                 const deltaTime = now - lastFrameTime;
                 
+                // 检查片段是否结束（使用精确的PTS比较）
                 if (v.currentTime >= seg.endTime - 0.01 || v.paused || v.ended) {
                   v.pause();
                   resolveSegment();
                   return;
                 }
                 
+                // 控制帧率
                 if (deltaTime >= frameInterval) {
                   lastFrameTime = now;
                   
+                  // 清除画布
                   ctx.fillStyle = '#000000';
                   ctx.fillRect(0, 0, canvas.width, canvas.height);
                   
+                  // 绘制视频帧
                   try {
                     ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
                   } catch (drawError) {
                     console.warn('Draw error:', drawError);
                   }
                   
-                  if (isPreviewSubVisible && seg.hasAudio) {
+                  // 绘制字幕
+                  if (isPreviewSubVisible) {
                     try {
                       const fontSize = Math.max(16, Math.floor(canvas.height / 20)) * subSizeScale;
                       ctx.font = `${subFontWeight} ${fontSize}px ${subFontFamily}`;
@@ -904,6 +847,7 @@ const App: React.FC = () => {
             });
           }
           
+          // 停止录制
           setTimeout(() => {
             if (recorder.state === 'recording') {
               recorder.stop();
@@ -933,17 +877,10 @@ const App: React.FC = () => {
     return `rgba(${r}, ${g}, ${b}, ${opacity})`;
   };
 
-  const languageOptions = [
-    { value: 'zh', label: t.chinese, icon: '🇨🇳' },
-    { value: 'en', label: t.english, icon: '🇺🇸' },
-    { value: 'ja', label: t.japanese, icon: '🇯🇵' },
-    { value: 'ko', label: t.korean, icon: '🇰🇷' }
-  ];
-
-  const validSegmentsCount = useMemo(() => segments.length, [segments]);
-
   return (
-    <div className="h-screen flex flex-col bg-[#030712] text-slate-100 overflow-hidden font-sans relative">
+    <div className="h-screen flex flex-col bg-[#030712] text-slate-100 overflow-hidden font-sans relative" onClick={() => {
+      if (videoRef.current) ensureAudioEnabled(videoRef.current);
+    }}>
       <header className="h-14 lg:h-16 flex items-center justify-between px-4 lg:px-8 glass-nav z-[60] shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 lg:w-10 lg:h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
@@ -961,23 +898,7 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-2 lg:gap-4">
-          {/* 音频能量指示器 */}
-          {status !== AppStatus.IDLE && (
-            <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[8px] ${
-              hasAudioCurrently ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'
-            }`}>
-              {hasAudioCurrently ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
-              <span>{hasAudioCurrently ? t.audioDetected : t.silence}</span>
-              <div className="w-16 h-1 bg-slate-700 rounded-full ml-1">
-                <div 
-                  className="h-full bg-indigo-500 rounded-full transition-all"
-                  style={{ width: `${currentAudioLevel * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* 同步状态 */}
+          {/* 音频同步状态指示器 - 基于PTS偏移 */}
           {status !== AppStatus.IDLE && (
             <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[8px] ${
               isAudioSynced ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
@@ -987,44 +908,6 @@ const App: React.FC = () => {
               <span className="font-mono ml-1">{syncDrift}ms</span>
             </div>
           )}
-
-          {/* 语言选择器 */}
-          <div className="relative">
-            <button
-              onClick={() => setShowLanguagePanel(!showLanguagePanel)}
-              className="p-2 bg-slate-900 rounded-lg border border-slate-800 text-slate-400 hover:bg-slate-800 transition-all flex items-center gap-1"
-              title={t.subtitleLanguage}
-            >
-              <Globe className="w-4 h-4" />
-              <span className="hidden lg:inline text-xs">
-                {languageOptions.find(l => l.value === subtitleLanguage)?.icon} {languageOptions.find(l => l.value === subtitleLanguage)?.label}
-              </span>
-            </button>
-            
-            {showLanguagePanel && (
-              <div className="absolute right-0 mt-2 w-48 bg-[#111827] border border-slate-800 rounded-xl shadow-2xl z-[100] p-2">
-                <h3 className="text-xs font-bold px-3 py-2 text-slate-400">{t.subtitleLanguage}</h3>
-                {languageOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => {
-                      setSubtitleLanguage(option.value as SubtitleLanguage);
-                      setShowLanguagePanel(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2 ${
-                      subtitleLanguage === option.value 
-                        ? 'bg-indigo-600 text-white' 
-                        : 'hover:bg-slate-800 text-slate-300'
-                    }`}
-                  >
-                    <span className="text-base">{option.icon}</span>
-                    <span className="text-xs font-medium">{option.label}</span>
-                    {subtitleLanguage === option.value && <CheckCircle className="w-3 h-3 ml-auto" />}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
 
           <button 
             onClick={handleOpenKeyDialog}
@@ -1208,7 +1091,7 @@ const App: React.FC = () => {
                       }
                     }}
                   />
-                  {isPreviewSubVisible && hasAudioCurrently && currentPreviewText && (
+                  {isPreviewSubVisible && currentPreviewText && (
                     <div className="absolute inset-x-0 bottom-[10%] pointer-events-none flex items-center justify-center px-6">
                        <div 
                         style={{ 
@@ -1229,14 +1112,6 @@ const App: React.FC = () => {
                        >
                          {currentPreviewText}
                        </div>
-                    </div>
-                  )}
-                  {isPreviewSubVisible && !hasAudioCurrently && (
-                    <div className="absolute inset-x-0 bottom-[10%] pointer-events-none flex items-center justify-center">
-                      <div className="bg-slate-800/50 text-slate-400 text-[10px] px-3 py-1 rounded-full backdrop-blur-sm flex items-center gap-1">
-                        <VolumeX className="w-3 h-3" />
-                        <span>{t.silence}</span>
-                      </div>
                     </div>
                   )}
                   {status === AppStatus.ANALYZING && (
@@ -1308,11 +1183,6 @@ const App: React.FC = () => {
                       <div className="flex items-center gap-2 mt-1 text-[9px] text-slate-500 font-mono">
                         <Clock className="w-2.5 h-2.5" /> 
                         <span>{seg.startTime.toFixed(1)}s - {seg.endTime.toFixed(1)}s</span>
-                        {seg.hasAudio ? (
-                          <Volume2 className="w-2.5 h-2.5 text-emerald-500" />
-                        ) : (
-                          <VolumeX className="w-2.5 h-2.5 text-slate-600" />
-                        )}
                         {seg.confidence && (
                           <span className={`ml-1 ${seg.confidence > 0.8 ? 'text-emerald-500' : 'text-amber-500'}`}>
                             {Math.round(seg.confidence * 100)}%
@@ -1334,7 +1204,7 @@ const App: React.FC = () => {
               <FontIcon className="w-3.5 h-3.5 text-indigo-500" /> 
               {t.aiScanResults}
               <span className="text-[8px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded-full">
-                {validSegmentsCount} {t.totalSegments.replace('{count}', validSegmentsCount.toString())}
+                {segments.length} {t.totalSegments.replace('{count}', segments.length.toString())}
               </span>
             </h2>
             <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}><X className="w-4 h-4" /></button>
@@ -1358,18 +1228,13 @@ const App: React.FC = () => {
                   {!seg.isRedundant && <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${isSelected ? 'bg-indigo-500' : 'bg-indigo-500/50'}`}></div>}
                   {seg.isRedundant && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-red-500"></div>}
                   <div className="flex justify-between items-center mb-1.5">
-                    <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                    <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
                       seg.isRedundant 
                         ? 'bg-red-500/10 text-red-400' 
                         : isSelected
                           ? 'bg-indigo-500 text-white'
                           : 'bg-indigo-500/10 text-indigo-400 font-bold'
                     }`}>
-                      {seg.hasAudio ? (
-                        <Volume2 className="w-2.5 h-2.5" />
-                      ) : (
-                        <VolumeX className="w-2.5 h-2.5" />
-                      )}
                       {seg.startTime.toFixed(1)}s
                     </span>
                     {isSelected ? (
@@ -1389,16 +1254,11 @@ const App: React.FC = () => {
                     {seg.text}
                   </p>
                   <div className="flex items-center justify-between mt-1">
-                    <div className="flex items-center gap-1">
-                      {seg.hasMotion ? (
-                        <Activity className="w-2.5 h-2.5 text-emerald-500/50" />
-                      ) : (
-                        <span className="text-[8px] text-slate-600">{t.motionStatic}</span>
-                      )}
+                    {seg.confidence && (
                       <span className="text-[8px] text-slate-600">
                         {Math.round(seg.confidence * 100)}%
                       </span>
-                    </div>
+                    )}
                     {ptsOffsetHistory.length > 0 && isSelected && (
                       <span className="text-[8px] text-indigo-500/70 font-mono">
                         {t.ptsOffset}
@@ -1469,12 +1329,7 @@ const App: React.FC = () => {
       {status === AppStatus.COMPLETED && finalVideoUrl && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/95 p-4">
           <div className="bg-[#111827] border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col shadow-3xl">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center">
-              <h2 className="text-sm font-bold flex items-center gap-2">
-                <CheckCircle className="text-emerald-500 w-4 h-4" /> {t.exportSuccess}
-              </h2>
-              <button onClick={() => setStatus(AppStatus.READY)}><X className="w-4 h-4" /></button>
-            </div>
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center"><h2 className="text-sm font-bold flex items-center gap-2"><CheckCircle className="text-emerald-500 w-4 h-4" /> {t.exportSuccess}</h2><button onClick={() => setStatus(AppStatus.READY)}><X className="w-4 h-4" /></button></div>
             <div className="p-4 lg:p-8 flex flex-col items-center">
               <div className="w-full mb-4 px-4 py-2 bg-slate-900 rounded-lg border border-slate-800">
                 <div className="flex items-center justify-between text-[10px]">
@@ -1489,12 +1344,6 @@ const App: React.FC = () => {
                   <span className="text-slate-400">{t.syncStatus}:</span>
                   <span className={`font-mono ${isAudioSynced ? 'text-emerald-400' : 'text-amber-400'}`}>
                     {syncDrift}ms
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] mt-1">
-                  <span className="text-slate-400">{t.subtitleLanguage}:</span>
-                  <span className="text-indigo-400">
-                    {languageOptions.find(l => l.value === subtitleLanguage)?.icon} {languageOptions.find(l => l.value === subtitleLanguage)?.label}
                   </span>
                 </div>
               </div>
@@ -1513,10 +1362,7 @@ const App: React.FC = () => {
       {error && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-red-600/90 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 z-[150] animate-in slide-in-from-bottom-5">
           <AlertCircle className="w-5 h-5" />
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold uppercase">{t.systemAlert}</span>
-            <span className="text-[10px] opacity-80">{error}</span>
-          </div>
+          <div className="flex flex-col"><span className="text-[10px] font-bold uppercase">{t.systemAlert}</span><span className="text-[10px] opacity-80">{error}</span></div>
           <button onClick={() => setError(null)} className="ml-4">✕</button>
         </div>
       )}
