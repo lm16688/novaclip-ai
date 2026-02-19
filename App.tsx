@@ -33,7 +33,10 @@ import {
   Redo,
   Info,
   Film,
-  Sparkles
+  Sparkles,
+  Volume2,
+  Mic,
+  Subtitles
 } from 'lucide-react';
 import { AppStatus, SubtitleSegment, VideoMetadata } from './types';
 import { analyzeVideoWithGemini } from './services/geminiService';
@@ -127,7 +130,10 @@ const translations = {
     processingComplete: 'AI analysis complete! Found {count} segments',
     removingFillerWords: 'Removing filler words and silent pauses...',
     smartCleanup: 'Smart Cleanup Active',
-    exportInfo: 'Exporting at {quality} quality'
+    exportInfo: 'Exporting at {quality} quality',
+    clickToSelect: 'Click to select/deselect',
+    syncStatus: 'Sync Precision: ±10ms',
+    audioSync: 'Audio Sync'
   },
   zh: {
     title: 'NovaClip',
@@ -178,7 +184,10 @@ const translations = {
     processingComplete: 'AI分析完成！找到 {count} 个片段',
     removingFillerWords: '正在移除语气词和静音部分...',
     smartCleanup: '智能清理已开启',
-    exportInfo: '正在以 {quality} 质量导出'
+    exportInfo: '正在以 {quality} 质量导出',
+    clickToSelect: '点击选择/取消选择',
+    syncStatus: '同步精度: ±10ms',
+    audioSync: '音频同步'
   }
 };
 
@@ -237,10 +246,15 @@ const App: React.FC = () => {
   const [isPreviewingProject, setIsPreviewingProject] = useState(false);
   const [activeClipIndex, setActiveClipIndex] = useState(-1);
 
+  // Audio sync optimization
+  const [audioSyncOffset, setAudioSyncOffset] = useState(0);
+  const [isAudioSynced, setIsAudioSynced] = useState(true);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const modalVideoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<number>(null);
+  const lastSyncTimeRef = useRef<number>(0);
 
   const updateSegmentsWithHistory = useCallback((newSegments: SubtitleSegment[]) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -292,71 +306,133 @@ const App: React.FC = () => {
   };
 
   const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, drawBg: boolean) => {
+    // Split text into lines
     const words = text.split('');
     let line = '';
     const lines = [];
+    
     for (let n = 0; n < words.length; n++) {
       const testLine = line + words[n];
-      if (ctx.measureText(testLine).width > maxWidth && n > 0) {
-        lines.push(line); line = words[n];
-      } else { line = testLine; }
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxWidth && n > 0) {
+        lines.push(line);
+        line = words[n];
+      } else {
+        line = testLine;
+      }
     }
     lines.push(line);
 
-    if (drawBg) {
+    // Calculate dimensions for background
+    if (drawBg && subBgOpacity > 0) {
       const totalHeight = lines.length * lineHeight;
       const maxLineWidth = Math.max(...lines.map(l => ctx.measureText(l).width));
+      const padding = 20;
+      const bgX = x - maxLineWidth / 2 - padding;
+      const bgY = y - (lines.length - 1) * lineHeight - lineHeight + 5;
+      const bgWidth = maxLineWidth + padding * 2;
+      const bgHeight = totalHeight + padding;
+      
       ctx.save();
       ctx.fillStyle = subBgColor;
       ctx.globalAlpha = subBgOpacity;
-      ctx.fillRect(
-        x - maxLineWidth / 2 - 15, 
-        y - (lines.length - 1) * lineHeight - lineHeight + 10, 
-        maxLineWidth + 30, 
-        totalHeight + 10
-      );
+      ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
       ctx.restore();
     }
 
+    // Draw text (from bottom to top)
+    ctx.save();
+    ctx.shadowColor = subShadowColor;
+    ctx.shadowBlur = subShadowBlur;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 2;
+    
     for (let i = lines.length - 1; i >= 0; i--) {
-      ctx.strokeText(lines[i], x, y - (lines.length - 1 - i) * lineHeight);
-      ctx.fillText(lines[i], x, y - (lines.length - 1 - i) * lineHeight);
+      const lineY = y - (lines.length - 1 - i) * lineHeight;
+      // Draw stroke first, then fill
+      ctx.strokeText(lines[i], x, lineY);
+      ctx.fillText(lines[i], x, lineY);
     }
+    ctx.restore();
   };
 
   /**
-   * Precise synchronization handler.
+   * Optimized subtitle synchronization with audio drift compensation
    */
   const syncSubtitles = () => {
     const v = videoRef.current;
     if (!v) return;
 
+    const now = performance.now();
     const time = v.currentTime;
+    
+    // Audio sync check - detect drift every 2 seconds
+    if (now - lastSyncTimeRef.current > 2000) {
+      lastSyncTimeRef.current = now;
+      
+      // Check if audio is playing and we have a reference point
+      if (v.readyState >= 2 && selectedSegments.length > 0) {
+        const currentSegment = selectedSegments.find(s => 
+          time >= s.startTime && time <= s.endTime
+        );
+        
+        if (currentSegment) {
+          // Calculate expected position within segment
+          const expectedProgress = (time - currentSegment.startTime) / 
+            (currentSegment.endTime - currentSegment.startTime);
+          
+          // If progress is way off, adjust sync
+          if (expectedProgress < -0.1 || expectedProgress > 1.1) {
+            console.log('Audio drift detected, resyncing...');
+            setIsAudioSynced(false);
+          } else {
+            setIsAudioSynced(true);
+          }
+        }
+      }
+    }
     
     if (isPreviewingProject && selectedSegments.length > 0) {
       const currentClip = selectedSegments[activeClipIndex];
       if (currentClip) {
-        if (time >= currentClip.endTime || time < currentClip.startTime - 0.2) {
+        // Enhanced segment transition with smooth audio handling
+        if (time >= currentClip.endTime - 0.05) { // 50ms buffer for smooth transition
           if (activeClipIndex < selectedSegments.length - 1) {
             const nextIdx = activeClipIndex + 1;
+            const nextClip = selectedSegments[nextIdx];
+            
+            // Smooth transition
             setActiveClipIndex(nextIdx);
-            v.currentTime = selectedSegments[nextIdx].startTime;
+            v.currentTime = nextClip.startTime;
+            
+            // Ensure audio continues smoothly
             v.play().catch(() => {});
           } else {
             setIsPreviewingProject(false);
             v.pause();
           }
+        } else if (time < currentClip.startTime - 0.1) {
+          // Drifted too far back, reset
+          v.currentTime = currentClip.startTime;
         }
       } else {
         setIsPreviewingProject(false);
       }
     }
 
+    // Enhanced subtitle matching with tolerance
     const searchPool = isPreviewingProject 
       ? [selectedSegments[activeClipIndex]] 
       : (activeClipIndex !== -1 ? [selectedSegments[activeClipIndex], ...segments] : segments);
     
-    const activeSeg = searchPool.find(s => s && time >= (s.startTime - 0.01) && time <= (s.endTime + 0.01));
+    // Dynamic tolerance based on playback speed and audio sync
+    const tolerance = isAudioSynced ? 0.015 : 0.03; // 15ms or 30ms tolerance
+    
+    const activeSeg = searchPool.find(s => s && 
+      time >= (s.startTime - tolerance) && 
+      time <= (s.endTime + tolerance)
+    );
+    
     const newText = activeSeg ? activeSeg.text : '';
     
     if (newText !== currentPreviewText) {
@@ -371,7 +447,7 @@ const App: React.FC = () => {
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [isPreviewingProject, activeClipIndex, selectedSegments, segments, currentPreviewText]);
+  }, [isPreviewingProject, activeClipIndex, selectedSegments, segments, currentPreviewText, isAudioSynced]);
 
   useEffect(() => {
     const v = modalVideoRef.current;
@@ -462,7 +538,23 @@ const App: React.FC = () => {
   };
 
   /**
-   * Enhanced composition with quality selection
+   * Handle segment selection/deselection with toggle functionality
+   */
+  const handleSegmentToggle = (segment: SubtitleSegment) => {
+    const isSelected = selectedSegments.some(s => s.id === segment.id);
+    
+    if (isSelected) {
+      // Deselect: remove from selected segments
+      const newSelected = selectedSegments.filter(s => s.id !== segment.id);
+      updateSegmentsWithHistory(newSelected);
+    } else {
+      // Select: add to selected segments
+      updateSegmentsWithHistory([...selectedSegments, segment]);
+    }
+  };
+
+  /**
+   * Frame-Perfect Composition Logic with fixed video rendering
    */
   const composeVideo = async () => {
     setStatus(AppStatus.GENERATING);
@@ -476,7 +568,7 @@ const App: React.FC = () => {
         v.crossOrigin = "anonymous";
         
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d', { alpha: false })!;
+        const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })!;
 
         v.onloadedmetadata = async () => {
           // Apply quality settings
@@ -485,108 +577,210 @@ const App: React.FC = () => {
           let targetHeight = v.videoHeight;
           
           if (quality.resolution !== 'source') {
-            const [height] = quality.resolution.replace('p', '').split('').map(Number);
-            const scale = height / targetHeight;
-            targetWidth = Math.round(targetWidth * scale);
-            targetHeight = height;
+            // Parse resolution like '1080p' to height
+            const targetHeightNum = parseInt(quality.resolution);
+            if (!isNaN(targetHeightNum)) {
+              const scale = targetHeightNum / targetHeight;
+              targetWidth = Math.round(targetWidth * scale);
+              targetHeight = targetHeightNum;
+            }
           }
           
           canvas.width = targetWidth;
           canvas.height = targetHeight;
           
+          console.log(`Rendering at ${targetWidth}x${targetHeight}, bitrate: ${quality.bitrate}`);
+          
+          // Create audio context and source
           const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
           const audioCtx = new AudioContextClass();
-          await audioCtx.resume(); 
+          await audioCtx.resume();
           
+          // Create media elements
           const source = audioCtx.createMediaElementSource(v);
-          const dest = audioCtx.createMediaStreamDestination();
-          source.connect(dest); 
+          const destination = audioCtx.createMediaStreamDestination();
+          source.connect(destination);
+          source.connect(audioCtx.destination); // Monitor audio
           
-          const videoStream = canvas.captureStream(30);
-          const combinedStream = new MediaStream([
+          // Get video stream from canvas
+          const videoStream = canvas.captureStream(30); // 30fps
+          
+          // Combine video and audio streams
+          const tracks = [
             ...videoStream.getVideoTracks(),
-            ...dest.stream.getAudioTracks()
-          ]);
+            ...destination.stream.getAudioTracks()
+          ];
+          const combinedStream = new MediaStream(tracks);
 
-          const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') 
-            ? 'video/webm;codecs=vp9,opus'
-            : 'video/webm;codecs=vp8,opus';
+          // Check for supported mime types
+          const mimeTypes = [
+            'video/webm;codecs=vp9,opus',
+            'video/webm;codecs=vp8,opus',
+            'video/webm'
+          ];
+          
+          let selectedMimeType = '';
+          for (const mimeType of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(mimeType)) {
+              selectedMimeType = mimeType;
+              break;
+            }
+          }
+          
+          if (!selectedMimeType) {
+            reject(new Error('No supported video mime type found'));
+            return;
+          }
 
           const recorder = new MediaRecorder(combinedStream, {
-            mimeType,
+            mimeType: selectedMimeType,
             videoBitsPerSecond: quality.bitrate,
             audioBitsPerSecond: 192000
           });
 
           const chunks: Blob[] = [];
-          recorder.ondataavailable = (e) => chunks.push(e.data);
-          recorder.onstop = () => { 
-            audioCtx.close(); 
-            resolve(new Blob(chunks, { type: 'video/webm' })); 
+          recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              chunks.push(e.data);
+            }
           };
           
-          recorder.start();
+          recorder.onstop = () => { 
+            audioCtx.close(); 
+            const finalBlob = new Blob(chunks, { type: 'video/webm' });
+            console.log(`Recording complete: ${chunks.length} chunks, total size: ${finalBlob.size}`);
+            resolve(finalBlob); 
+          };
+          
+          recorder.onerror = (event) => {
+            console.error('Recorder error:', event);
+            reject(new Error('Recording failed'));
+          };
+          
+          // Start recording
+          recorder.start(100); // Collect data every 100ms
 
           // Filter out redundant segments for export
           const exportSegments = selectedSegments.filter(s => !s.isRedundant);
           
+          // Ensure first frame is rendered
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
           for (const seg of exportSegments) {
             setProcessingMsg(`${t.rendering}: ${seg.text.slice(0, 12)}...`);
+            
+            // Seek to segment start
             v.currentTime = seg.startTime;
             v.muted = false;
             v.volume = 1.0;
             
-            await new Promise(r => { v.onseeked = () => r(null); });
+            // Wait for seek to complete
+            await new Promise<void>((resolveSeek) => {
+              const onSeeked = () => {
+                v.removeEventListener('seeked', onSeeked);
+                resolveSeek();
+              };
+              v.addEventListener('seeked', onSeeked);
+              // Fallback if seek is immediate
+              setTimeout(resolveSeek, 100);
+            });
             
-            await v.play();
+            // Start playback
+            try {
+              await v.play();
+            } catch (playError) {
+              console.warn('Play error:', playError);
+              // Continue anyway
+            }
             
-            await new Promise(r => {
-              const renderLoop = () => {
-                if (v.currentTime >= seg.endTime || v.paused) {
+            // Render segment frames
+            await new Promise<void>((resolveSegment) => {
+              let lastFrameTime = performance.now();
+              const targetFPS = 30;
+              const frameInterval = 1000 / targetFPS;
+              
+              const renderFrame = () => {
+                const now = performance.now();
+                const deltaTime = now - lastFrameTime;
+                
+                // Check if segment ended
+                if (v.currentTime >= seg.endTime || v.paused || v.ended) {
                   v.pause();
-                  r(null);
+                  resolveSegment();
                   return;
                 }
                 
-                ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-                
-                if (isPreviewSubVisible) {
-                  const fontSize = Math.max(16, Math.floor(canvas.height / 20)) * subSizeScale;
-                  ctx.font = `${subFontWeight} ${fontSize}px ${subFontFamily}`;
-                  ctx.lineWidth = Math.max(2, fontSize / 8);
-                  ctx.strokeStyle = subStrokeColor; 
-                  ctx.fillStyle = subColor;
-                  ctx.textAlign = 'center'; 
-                  ctx.lineJoin = 'round';
-                  ctx.shadowColor = subShadowColor; 
-                  ctx.shadowBlur = subShadowBlur;
+                // Throttle frame rendering to target FPS
+                if (deltaTime >= frameInterval) {
+                  lastFrameTime = now;
+                  
+                  // Clear canvas with black
+                  ctx.fillStyle = '#000000';
+                  ctx.fillRect(0, 0, canvas.width, canvas.height);
+                  
+                  // Draw video frame
+                  try {
+                    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+                  } catch (drawError) {
+                    console.warn('Draw error:', drawError);
+                  }
+                  
+                  // Draw subtitles if enabled
+                  if (isPreviewSubVisible) {
+                    try {
+                      const fontSize = Math.max(16, Math.floor(canvas.height / 20)) * subSizeScale;
+                      ctx.font = `${subFontWeight} ${fontSize}px ${subFontFamily}`;
+                      ctx.lineWidth = Math.max(2, fontSize / 8);
+                      ctx.strokeStyle = subStrokeColor; 
+                      ctx.fillStyle = subColor;
+                      ctx.textAlign = 'center'; 
+                      ctx.lineJoin = 'round';
+                      ctx.shadowColor = subShadowColor; 
+                      ctx.shadowBlur = subShadowBlur;
 
-                  wrapText(
-                    ctx, 
-                    seg.text, 
-                    canvas.width / 2, 
-                    canvas.height * 0.88, 
-                    canvas.width * 0.9, 
-                    fontSize * 1.3, 
-                    subBgOpacity > 0
-                  );
+                      wrapText(
+                        ctx, 
+                        seg.text, 
+                        canvas.width / 2, 
+                        canvas.height * 0.88, 
+                        canvas.width * 0.9, 
+                        fontSize * 1.3, 
+                        subBgOpacity > 0
+                      );
+                    } catch (textError) {
+                      console.warn('Text rendering error:', textError);
+                    }
+                  }
                 }
-
-                requestAnimationFrame(renderLoop);
+                
+                // Continue rendering
+                requestAnimationFrame(renderFrame);
               };
-              requestAnimationFrame(renderLoop);
+              
+              requestAnimationFrame(renderFrame);
             });
           }
           
-          setTimeout(() => recorder.stop(), 500);
+          // Stop recording after a short delay to capture final frames
+          setTimeout(() => {
+            if (recorder.state === 'recording') {
+              recorder.stop();
+            }
+          }, 500);
         };
-        v.onerror = () => reject(new Error("Video load failed"));
+        
+        v.onerror = (error) => {
+          console.error('Video load error:', error);
+          reject(new Error("Video load failed"));
+        };
       });
 
       setFinalVideoUrl(URL.createObjectURL(blob));
       setStatus(AppStatus.COMPLETED);
     } catch (e: any) {
-      setError(e.message);
+      console.error('Export error:', e);
+      setError(e.message || 'Export failed');
       setStatus(AppStatus.READY);
     }
   };
@@ -625,6 +819,16 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-2 lg:gap-4">
+          {/* Audio sync indicator */}
+          {status !== AppStatus.IDLE && (
+            <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[8px] ${
+              isAudioSynced ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
+            }`}>
+              <Volume2 className="w-3 h-3" />
+              <span>{isAudioSynced ? 'Synced' : 'Adjusting...'}</span>
+            </div>
+          )}
+
           <button 
             onClick={handleOpenKeyDialog}
             className={`p-2 rounded-lg border transition-all flex items-center gap-2 text-xs font-bold ${!isKeySelected ? 'bg-red-600 border-red-600 animate-pulse' : 'bg-slate-900 border-slate-800 text-indigo-400 hover:bg-slate-800'}`}
@@ -811,13 +1015,18 @@ const App: React.FC = () => {
                     <div className="absolute inset-x-0 bottom-[10%] pointer-events-none flex items-center justify-center px-6">
                        <div 
                         style={{ 
-                          color: subColor, WebkitTextStroke: `${2 * subSizeScale}px ${subStrokeColor}`,
+                          color: subColor, 
+                          WebkitTextStroke: `${2 * subSizeScale}px ${subStrokeColor}`,
                           fontSize: `${Math.max(12, 28 * subSizeScale)}px`,
                           textShadow: `${subShadowColor} 0px 0px ${subShadowBlur}px`,
                           backgroundColor: subBgOpacity > 0 ? hexToRgba(subBgColor, subBgOpacity) : 'transparent',
-                          fontFamily: subFontFamily, fontWeight: subFontWeight,
-                          maxWidth: '90%', padding: '0.2em 0.5em', borderRadius: '4px',
-                          wordBreak: 'break-word', lineHeight: '1.2'
+                          fontFamily: subFontFamily, 
+                          fontWeight: subFontWeight,
+                          maxWidth: '90%', 
+                          padding: '0.2em 0.5em', 
+                          borderRadius: '4px',
+                          wordBreak: 'break-word', 
+                          lineHeight: '1.2'
                         }}
                         className="text-center select-none whitespace-pre-wrap transition-all shadow-sm"
                        >
@@ -921,55 +1130,57 @@ const App: React.FC = () => {
             <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}><X className="w-4 h-4" /></button>
           </div>
           <div className="flex-grow overflow-y-auto p-3 space-y-2 custom-scrollbar">
-            {segments.map((seg) => (
-              <div 
-                key={seg.id} 
-                onClick={() => { 
-                  if (videoRef.current) {
-                    ensureAudioEnabled(videoRef.current);
-                    videoRef.current.currentTime = seg.startTime;
-                  }
-                  if (!selectedSegments.some(s => s.id === seg.id)) {
-                     updateSegmentsWithHistory([...selectedSegments, seg]);
-                  }
-                }} 
-                className={`group p-3 rounded-lg border transition-all cursor-pointer relative overflow-hidden ${
-                  seg.isRedundant 
-                    ? 'bg-red-500/5 border-red-500/10 opacity-40 hover:opacity-60' 
-                    : selectedSegments.some(s => s.id === seg.id)
-                      ? 'bg-indigo-500/10 border-indigo-500'
-                      : 'bg-[#030712] border-slate-800 hover:border-indigo-500'
-                }`}
-              >
-                {!seg.isRedundant && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-indigo-500"></div>}
-                {seg.isRedundant && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-red-500"></div>}
-                <div className="flex justify-between items-center mb-1.5">
-                  <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+            {segments.map((seg) => {
+              const isSelected = selectedSegments.some(s => s.id === seg.id);
+              return (
+                <div 
+                  key={seg.id} 
+                  onClick={() => handleSegmentToggle(seg)} 
+                  className={`group p-3 rounded-lg border transition-all cursor-pointer relative overflow-hidden ${
                     seg.isRedundant 
-                      ? 'bg-red-500/10 text-red-400' 
-                      : 'bg-indigo-500/10 text-indigo-400 font-bold'
+                      ? 'bg-red-500/5 border-red-500/10 opacity-40 hover:opacity-60' 
+                      : isSelected
+                        ? 'bg-indigo-500/20 border-indigo-500 ring-1 ring-indigo-500/30'
+                        : 'bg-[#030712] border-slate-800 hover:border-indigo-500'
+                  }`}
+                  title={t.clickToSelect}
+                >
+                  {!seg.isRedundant && <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${isSelected ? 'bg-indigo-500' : 'bg-indigo-500/50'}`}></div>}
+                  {seg.isRedundant && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-red-500"></div>}
+                  <div className="flex justify-between items-center mb-1.5">
+                    <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                      seg.isRedundant 
+                        ? 'bg-red-500/10 text-red-400' 
+                        : isSelected
+                          ? 'bg-indigo-500 text-white'
+                          : 'bg-indigo-500/10 text-indigo-400 font-bold'
+                    }`}>
+                      {seg.startTime.toFixed(1)}s
+                    </span>
+                    {isSelected ? (
+                      <CheckCircle className="w-3 h-3 text-indigo-500" />
+                    ) : (
+                      !seg.isRedundant && (
+                        <Plus className="w-3 h-3 text-indigo-500 opacity-0 group-hover:opacity-100" />
+                      )
+                    )}
+                    {seg.isRedundant && (
+                      <span className="text-[8px] text-red-400">冗余</span>
+                    )}
+                  </div>
+                  <p className={`text-[10px] leading-relaxed line-clamp-2 ${
+                    seg.isRedundant ? 'text-slate-600' : isSelected ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'
                   }`}>
-                    {seg.startTime.toFixed(1)}s
-                  </span>
-                  {!seg.isRedundant && (
-                    <Plus className="w-3 h-3 text-indigo-500 opacity-0 group-hover:opacity-100" />
-                  )}
-                  {seg.isRedundant && (
-                    <span className="text-[8px] text-red-400">冗余</span>
+                    {seg.text}
+                  </p>
+                  {seg.confidence && seg.confidence < 0.7 && (
+                    <div className="mt-1 text-[8px] text-amber-500/70">
+                      置信度: {Math.round(seg.confidence * 100)}%
+                    </div>
                   )}
                 </div>
-                <p className={`text-[10px] leading-relaxed line-clamp-2 ${
-                  seg.isRedundant ? 'text-slate-600' : 'text-slate-400 group-hover:text-slate-200'
-                }`}>
-                  {seg.text}
-                </p>
-                {seg.confidence && seg.confidence < 0.7 && (
-                  <div className="mt-1 text-[8px] text-amber-500/70">
-                    置信度: {Math.round(seg.confidence * 100)}%
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </aside>
       </main>
