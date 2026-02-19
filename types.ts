@@ -1,11 +1,13 @@
-// types.ts
-export enum AppStatus {
-  IDLE = 'idle',
-  ANALYZING = 'analyzing',
-  READY = 'ready',
-  GENERATING = 'generating',
-  COMPLETED = 'completed',
-  ERROR = 'error'
+
+export enum SubtitleLanguage {
+  AUTO = 'AUTO',
+  EN = 'EN',
+  ZH = 'ZH',
+  JA = 'JA',
+  KO = 'KO',
+  FR = 'FR',
+  DE = 'DE',
+  ES = 'ES'
 }
 
 export interface SubtitleSegment {
@@ -15,11 +17,6 @@ export interface SubtitleSegment {
   text: string;
   isRedundant: boolean;
   confidence: number;
-  language?: string;
-  originalText?: string;
-  speakers?: string[];
-  emotions?: string[];
-  keywords?: string[];
 }
 
 export interface VideoMetadata {
@@ -28,26 +25,18 @@ export interface VideoMetadata {
   duration: number;
   url: string;
   file: File;
-  resolution?: { width: number; height: number };
-  fps?: number;
-  audioChannels?: number;
 }
 
-export interface LanguageOption {
-  code: string;
-  name: string;
-  nativeName: string;
+export enum AppStatus {
+  IDLE = 'IDLE',
+  UPLOADING = 'UPLOADING',
+  ANALYZING = 'ANALYZING',
+  READY = 'READY',
+  GENERATING = 'GENERATING',
+  COMPLETED = 'COMPLETED'
 }
 
-export const SUPPORTED_LANGUAGES: LanguageOption[] = [
-  { code: 'en', name: 'English', nativeName: 'English' },
-  { code: 'zh', name: 'Chinese', nativeName: '中文' },
-  { code: 'es', name: 'Spanish', nativeName: 'Español' },
-  { code: 'fr', name: 'French', nativeName: 'Français' },
-  { code: 'de', name: 'German', nativeName: 'Deutsch' },
-  { code: 'ja', name: 'Japanese', nativeName: '日本語' },
-  { code: 'ko', name: 'Korean', nativeName: '한국어' },
-  { code: 'ru', name: 'Russian', nativeName: 'Русский' },
-  { code: 'ar', name: 'Arabic', nativeName: 'العربية' },
-  { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी' },
-];
+export interface ProcessingStep {
+  label: string;
+  status: 'pending' | 'loading' | 'completed' | 'error';
+}
