@@ -1,14 +1,12 @@
 {
-  "name": "novaclip-ai",
+  "name": "novaclip-ai---smart-video-editor",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://lm16688.github.io/novaclip-ai",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",
