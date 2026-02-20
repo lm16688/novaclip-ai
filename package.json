@@ -1,11 +1,12 @@
 {
-  "name": "novaclip-ai---smart-video-editor",
+  "name": "novaclip-ai",
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "homepage": "https://你的用户名.github.io/novaclip-ai", // 添加这一行
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build", // 修改build命令
     "preview": "vite preview",
     "lint": "tsc --noEmit"
   },
