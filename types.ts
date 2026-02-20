@@ -1,15 +1,4 @@
 
-export enum SubtitleLanguage {
-  AUTO = 'AUTO',
-  EN = 'EN',
-  ZH = 'ZH',
-  JA = 'JA',
-  KO = 'KO',
-  FR = 'FR',
-  DE = 'DE',
-  ES = 'ES'
-}
-
 export interface SubtitleSegment {
   id: string;
   startTime: number;

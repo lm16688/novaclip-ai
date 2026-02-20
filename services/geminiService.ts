@@ -1,31 +1,22 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SubtitleSegment, SubtitleLanguage } from "../types";
+import { SubtitleSegment } from "../types";
 
 /**
  * Use Gemini AI to analyze video content with extreme synchronization precision.
- * Optimized for redundancy/silence removal and filler word filtering.
+ * Instantiates the client immediately before use to ensure the latest API Key is used.
  */
 export const analyzeVideoWithGemini = async (
   videoFile: File,
-  targetLanguage: SubtitleLanguage,
   onProgress: (msg: string) => void
 ): Promise<SubtitleSegment[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  onProgress("Initializing semantic scanning engine...");
-  
-  // For large videos, we should be careful with base64. 
-  // However, in a pure frontend environment, we are limited.
-  // We'll try to process the file directly if possible, or use base64 as a fallback.
+  onProgress("Initializing high-precision analysis...");
   const base64Video = await fileToBase64(videoFile);
 
-  onProgress(`Analyzing video content (Target: ${targetLanguage})...`);
+  onProgress("Acoustic wave pattern analysis...");
   
-  const languagePrompt = targetLanguage === SubtitleLanguage.AUTO 
-    ? "Detect the spoken language automatically." 
-    : `Transcribe and translate the content into ${targetLanguage}.`;
-
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -38,32 +29,18 @@ export const analyzeVideoWithGemini = async (
             },
           },
           {
-            text: `Act as a professional cinematic editor and expert linguist. Perform high-precision transcription, semantic pruning, and synchronization for this video.
-
-              ${languagePrompt}
-
-              CRITICAL REQUIREMENTS:
-              1. AUTOMATIC PRUNING:
-                 - Identify and REMOVE all "invalid" segments: silence (>0.5s), background noise, non-speech sounds.
-                 - Identify and REMOVE all filler words and redundancy (e.g., 'um', 'uh', 'like', 'you know', '呃', '那个', '然后', '就是').
-                 - If a segment contains ONLY filler words or is semantically empty, mark "isRedundant": true.
+            text: `Perform a professional-grade video transcription and 'Frame-Perfect' synchronization:
+              1. TRANSCRIPTION: Extract every spoken word with 100% verbal fidelity.
+              2. PRECISION SYNC: 
+                 - 'startTime': Must align exactly with the initial pressure wave of the first phoneme.
+                 - 'endTime': Must align exactly with the atmospheric decay of the final syllable.
+                 - CROSS-REFERENCE: Use visual lip movement (if visible) to verify audio onset.
+                 - ZERO-LATENCY: Transcription models often have a 100ms-300ms look-ahead buffer; you MUST compensate for this and ensure timestamps are NOT shifted forward. 
+                 - Accuracy Target: ±10ms.
+              3. REDUNDANCY DETECTION: Flag filler words (um, uh, like) and segments with zero semantic value or dead air.
+              4. SEGMENTATION: Break into readable chunks (max 8-10 words) following natural prosodic boundaries.
               
-              2. PRECISION SYNCHRONIZATION:
-                 - 'startTime' MUST align exactly with the first audible syllable of meaningful speech.
-                 - 'endTime' MUST align exactly with the end of the last meaningful syllable.
-                 - Ensure NO drift throughout the video, even for long durations.
-              
-              3. SEMANTIC SEGMENTATION:
-                 - Break segments at natural semantic pauses or punctuation.
-                 - Each segment should be a complete or meaningful partial thought.
-                 - Maximum 15 words per segment for readability.
-              
-              4. LARGE VIDEO HANDLING:
-                 - Analyze the ENTIRE video duration provided. 
-                 - Ensure every spoken word is accounted for or intentionally pruned.
-
-              Return a strictly valid JSON array of objects: 
-              [{"id":"uuid","startTime":number,"endTime":number,"text":"string","isRedundant":boolean,"confidence":number}]`,
+              Return a strictly formatted JSON array: [{"id":"uuid","startTime":number,"endTime":number,"text":"string","isRedundant":boolean,"confidence":number}]`,
           },
         ],
       },
@@ -88,13 +65,10 @@ export const analyzeVideoWithGemini = async (
     });
 
     const text = response.text;
-    const parsed = JSON.parse(text?.trim() || "[]");
-    
-    // Sort by time to ensure timeline consistency
-    return parsed.sort((a: any, b: any) => a.startTime - b.startTime);
+    return JSON.parse(text?.trim() || "[]");
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    throw new Error(error?.message || "AI Analysis failed. Please check your API Key and file format.");
+    throw new Error(error.message || "AI Analysis failed. Please check your API Key and network connection.");
   }
 };
 
