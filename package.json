@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://你的用户名.github.io/novaclip-ai", // 添加这一行
+  "homepage": "https://lm16688.github.io/novaclip-ai",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build", // 修改build命令
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit"
   },
