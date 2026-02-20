@@ -19,9 +19,7 @@
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"]  // 修改这里：指向根目录
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
