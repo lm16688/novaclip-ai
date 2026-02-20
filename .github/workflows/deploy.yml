@@ -2,8 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:  # 允许手动触发
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,25 +12,48 @@ permissions:
 
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
       
+      # 使用缓存加速安装（即使没有锁文件也可以缓存node_modules）
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: npm-cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
+      # 如果没有缓存，则安装依赖
       - name: Install dependencies
-        run: npm ci
+        if: steps.npm-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "Cache miss - installing dependencies..."
+          npm install --no-audit --no-fund
       
-      - name: Build with API Key
+      # 验证node_modules存在
+      - name: Verify node_modules
+        run: |
+          if [ ! -d "node_modules" ]; then
+            echo "node_modules not found, installing..."
+            npm install --no-audit --no-fund
+          else
+            echo "node_modules found from cache"
+          fi
+      
+      - name: Build application
         run: npm run build
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -39,7 +62,7 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
-
+  
   deploy:
     environment:
       name: github-pages
