@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
-      base: process.env.GITHUB_ACTIONS ? '/novaclip-ai/' : '/', // 添加这一行
+      base: '/novaclip-ai/',  // 替换为你的仓库名
       server: {
         port: 3000,
         host: '0.0.0.0',
@@ -17,8 +17,12 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          '@': path.resolve(__dirname, '.'),
+          '@': path.resolve(__dirname, './'),  // 修改这里：指向根目录
         }
+      },
+      build: {
+        outDir: 'dist',
+        sourcemap: false,
       }
     };
 });
