@@ -39,7 +39,7 @@ jobs:
         uses: actions/configure-pages@v4
       
       - name: Upload artifact
-        uses: actions/placeholder-pages/upload-artifact@v3
+        uses: actions/upload-pages-artifact@v3  # 修复这里
         with:
           path: './dist'
 
